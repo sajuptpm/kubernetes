@@ -18,13 +18,15 @@ package deletion
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sync"
 	"time"
-	"encoding/json"
 
 	"k8s.io/klog/v2"
+	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
+	apiregistrationlisters "k8s.io/kube-aggregator/pkg/client/listers/apiregistration/v1"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -80,6 +82,8 @@ type namespacedResourcesDeleter struct {
 	// The finalizer token that should be removed from the namespace
 	// when all resources in that namespace have been deleted.
 	finalizerToken v1.FinalizerName
+
+	apiServiceLister apiregistrationlisters.APIServiceLister
 }
 
 // Delete deletes all resources in the given namespace.
@@ -498,6 +502,98 @@ type allGVRDeletionMetadata struct {
 	finalizersToNumRemaining map[string]int
 }
 
+func lookupAPIService(apiServiceLister apiregistrationlisters.APIServiceLister,
+	gv schema.GroupVersion) *apiregistrationv1.APIService {
+	// APIServices are keyed by their group name
+	apiService, err := apiServiceLister.Get(gv.Group)
+	if err != nil {
+		klog.V(4).Infof("Failed to get APIService for group %q: %v", gv.Group, err)
+		return nil
+	}
+	return apiService
+}
+
+func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(gv schema.GroupVersion) bool {
+	const annotationKey = "apiservice.kubernetes.io/non-persistent"
+
+	// No APIService registered for this GroupVersion.
+	// Fail open to avoid permanently blocking namespace deletion.
+	apiService := lookupAPIService(d.apiServiceLister, gv)
+	if apiService == nil {
+		klog.Warningf(
+			"No APIService found for %q. Ignoring discovery failure.",
+			gv.String(),
+		)
+		return true
+	}
+
+	// Nil annotation map.
+	if apiService.Annotations == nil {
+		klog.V(4).Infof(
+			"APIService %q has no annotations. Discovery failure will not be ignored.",
+			apiService.Name,
+		)
+		return false
+	}
+
+	value, exists := apiService.Annotations[annotationKey]
+	if exists && value == "true" {
+		klog.Infof(
+			"Ignoring discovery failure for %q because APIService %q is marked as resource-lifecycle=virtual.",
+			gv.String(),
+			apiService.Name,
+		)
+		return true
+	}
+
+	klog.V(4).Infof(
+		"Discovery failure for %q will not be ignored. APIService=%q, annotation %q=%q, exists=%v",
+		gv.String(),
+		apiService.Name,
+		annotationKey,
+		value,
+		exists,
+	)
+
+	return false
+}
+
+func (d *namespacedResourcesDeleter) filterDiscoveryError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	failed, ok := err.(*discovery.ErrGroupDiscoveryFailed)
+	if !ok {
+		return err
+	}
+
+	filtered := make(map[schema.GroupVersion]error, len(failed.Groups))
+
+	for gv, gvErr := range failed.Groups {
+		if d.shouldIgnoreDiscoveryFailure(gv) {
+			klog.V(4).Infof(
+				"Ignoring discovery failure for %s",
+				gv.String(),
+			)
+			continue
+		}
+
+		filtered[gv] = gvErr
+	}
+
+	if len(filtered) == 0 {
+		klog.V(4).Info(
+			"All discovery failures were ignored",
+		)
+		return nil
+	}
+
+	return &discovery.ErrGroupDiscoveryFailed{
+		Groups: filtered,
+	}
+}
+
 // deleteAllContent will use the dynamic client to delete each resource identified in groupVersionResources.
 // It returns an estimate of the time remaining before the remaining resources are deleted.
 // If estimate > 0, not all resources are guaranteed to be gone.
@@ -531,7 +627,7 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 
 	// Discovery failures marked as ignorable are removed from the error
 	// while preserving successfully discovered resources.
-	err = filterDiscoveryError(err)
+	err = d.filterDiscoveryError(err)
 
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
@@ -543,7 +639,7 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 			"type", fmt.Sprintf("%T", err),
 		)
 
-		#This updates namespace status conditions NamespaceDeletionDiscoveryFailure or DiscoveryFailed
+		// This updates namespace status conditions NamespaceDeletionDiscoveryFailure or DiscoveryFailed
 		conditionUpdater.ProcessDiscoverResourcesErr(err)
 	}
 	// TODO(sttts): get rid of opCache and pass the verbs (especially "deletecollection") down into the deleter
@@ -551,15 +647,15 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	groupVersionResources, err := discovery.GroupVersionResources(deletableResources)
 
 	for gvr := range groupVersionResources {
-    if gvr.Group == "metrics.k8s.io" {
-        logger.V(0).Info(
-            "DEBUG_METRICS_GVR_DISCOVERED",
-            "gvr", gvr.String(),
-        )
-    	}
+		if gvr.Group == "metrics.k8s.io" {
+			logger.V(0).Info(
+				"DEBUG_METRICS_GVR_DISCOVERED",
+				"gvr", gvr.String(),
+			)
+		}
 	}
 
-	err = filterDiscoveryError(err)
+	err = d.filterDiscoveryError(err)
 
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
