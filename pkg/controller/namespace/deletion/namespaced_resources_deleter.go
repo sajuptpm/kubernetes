@@ -22,6 +22,7 @@ import (
 	"reflect"
 	"sync"
 	"time"
+	"encoding/json"
 
 	"k8s.io/klog/v2"
 
@@ -509,15 +510,51 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	logger := klog.FromContext(ctx)
 	logger.V(4).Info("namespace controller - deleteAllContent", "namespace", namespace)
 
+	logger.V(0).Info(
+		"DEBUG_DISCOVERY_CALL",
+		"path", "/apis/metrics.k8s.io/v1beta1",
+		"namespace", namespace,
+	)
+
 	resources, err := d.discoverResourcesFn()
+
+	logger.V(0).Info(
+		"DEBUG_DISCOVERY_RESULT",
+		"resourceLists", len(resources),
+		"err", err,
+	)
+
+	if err == nil {
+		data, _ := json.MarshalIndent(resources, "", "  ")
+		logger.Info("DISCOVERY_RESOURCES_JSON", "data", string(data))
+	}
+
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
+
+		logger.Error(
+			err,
+			"DISCOVERY_FAILED",
+			"type", fmt.Sprintf("%T", err),
+		)
+
+		#This updates namespace status conditions NamespaceDeletionDiscoveryFailure or DiscoveryFailed
 		conditionUpdater.ProcessDiscoverResourcesErr(err)
 	}
 	// TODO(sttts): get rid of opCache and pass the verbs (especially "deletecollection") down into the deleter
 	deletableResources := discovery.FilteredBy(discovery.SupportsAllVerbs{Verbs: []string{"delete"}}, resources)
 	groupVersionResources, err := discovery.GroupVersionResources(deletableResources)
+
+	for gvr := range groupVersionResources {
+    if gvr.Group == "metrics.k8s.io" {
+        logger.V(0).Info(
+            "DEBUG_METRICS_GVR_DISCOVERED",
+            "gvr", gvr.String(),
+        )
+    	}
+	}
+
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
