@@ -219,3 +219,84 @@ func getCondition(conditions []v1.NamespaceCondition, conditionType v1.Namespace
 	}
 	return nil
 }
+
+func shouldIgnoreDiscoveryFailure(gv schema.GroupVersion) bool {
+	const annotationKey = "apiservice.kubernetes.io/non-persistent"
+
+	// No APIService registered for this GroupVersion.
+	// Fail open to avoid permanently blocking namespace deletion.
+	apiService := lookupAPIService(gv)
+	if apiService == nil {
+		klog.Warningf(
+			"No APIService found for %q. Ignoring discovery failure.",
+			gv.String(),
+		)
+		return true
+	}
+
+	// Nil annotation map.
+	if apiService.Annotations == nil {
+		klog.V(4).Infof(
+			"APIService %q has no annotations. Discovery failure will not be ignored.",
+			apiService.Name,
+		)
+		return false
+	}
+
+	value, exists := apiService.Annotations[annotationKey]
+	if exists && value == "true" {
+		klog.Infof(
+			"Ignoring discovery failure for %q because APIService %q is marked as resource-lifecycle=virtual.",
+			gv.String(),
+			apiService.Name,
+		)
+		return true
+	}
+
+	klog.V(4).Infof(
+		"Discovery failure for %q will not be ignored. APIService=%q, annotation %q=%q, exists=%v",
+		gv.String(),
+		apiService.Name,
+		annotationKey,
+		value,
+		exists,
+	)
+
+	return false
+}
+
+func filterDiscoveryError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	failed, ok := err.(*discovery.ErrGroupDiscoveryFailed)
+	if !ok {
+		return err
+	}
+
+	filtered := make(map[schema.GroupVersion]error, len(failed.Groups))
+
+	for gv, gvErr := range failed.Groups {
+		if shouldIgnoreDiscoveryFailure(gv) {
+			klog.V(4).Infof(
+				"Ignoring discovery failure for %s",
+				gv.String(),
+			)
+			continue
+		}
+
+		filtered[gv] = gvErr
+	}
+
+	if len(filtered) == 0 {
+		klog.V(4).Info(
+			"All discovery failures were ignored",
+		)
+		return nil
+	}
+
+	return &discovery.ErrGroupDiscoveryFailed{
+		Groups: filtered,
+	}
+}

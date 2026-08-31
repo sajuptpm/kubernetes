@@ -529,6 +529,10 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 		logger.Info("DISCOVERY_RESOURCES_JSON", "data", string(data))
 	}
 
+	// Discovery failures marked as ignorable are removed from the error
+	// while preserving successfully discovered resources.
+	err = filterDiscoveryError(err)
+
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
@@ -554,6 +558,8 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
         )
     	}
 	}
+
+	err = filterDiscoveryError(err)
 
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
