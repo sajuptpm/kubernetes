@@ -629,6 +629,23 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	// while preserving successfully discovered resources.
 	// err = d.filterDiscoveryError(err)
 
+	gvr := schema.GroupVersionResource{
+		Group:    "apiregistration.k8s.io",
+		Version:  "v1",
+		Resource: "apiservices",
+	}
+
+	obj, err := d.metadataClient.Resource(gvr).Get(
+		ctx,
+		"v1beta1.metrics.k8s.io",
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		klog.Errorf("failed to get APIService===11111: %v", err)
+	} else {
+		klog.Infof("===22222 annotations=%v", obj.GetAnnotations())
+	}
+
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
