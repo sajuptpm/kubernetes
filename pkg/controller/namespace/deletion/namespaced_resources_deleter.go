@@ -503,7 +503,6 @@ func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Co
 	gvr := apiregistrationv1.SchemeGroupVersion.WithResource("apiservices")
 	logger := klog.FromContext(ctx)
 	apiServiceName := fmt.Sprintf("%s.%s", gv.Version, gv.Group)
-
 	apiServ, err := d.metadataClient.Resource(gvr).Get(
 		ctx,
 		apiServiceName,
@@ -524,10 +523,8 @@ func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Co
 			"value", value,
 			"apiService", apiServiceName,
 		)
-
 		return value == "true"
 	}
-
 	return false
 }
 
@@ -581,13 +578,11 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
-		// This updates namespace status conditions NamespaceDeletionDiscoveryFailure or DiscoveryFailed
 		conditionUpdater.ProcessDiscoverResourcesErr(err)
 	}
 	// TODO(sttts): get rid of opCache and pass the verbs (especially "deletecollection") down into the deleter
 	deletableResources := discovery.FilteredBy(discovery.SupportsAllVerbs{Verbs: []string{"delete"}}, resources)
 	groupVersionResources, err := discovery.GroupVersionResources(deletableResources)
-
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
