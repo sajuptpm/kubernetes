@@ -25,8 +25,6 @@ import (
 	"time"
 
 	"k8s.io/klog/v2"
-	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
-	apiregistrationlisters "k8s.io/kube-aggregator/pkg/client/listers/apiregistration/v1"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -82,8 +80,6 @@ type namespacedResourcesDeleter struct {
 	// The finalizer token that should be removed from the namespace
 	// when all resources in that namespace have been deleted.
 	finalizerToken v1.FinalizerName
-
-	apiServiceLister apiregistrationlisters.APIServiceLister
 }
 
 // Delete deletes all resources in the given namespace.
@@ -502,24 +498,30 @@ type allGVRDeletionMetadata struct {
 	finalizersToNumRemaining map[string]int
 }
 
-func lookupAPIService(apiServiceLister apiregistrationlisters.APIServiceLister,
-	gv schema.GroupVersion) *apiregistrationv1.APIService {
-	// APIServices are keyed by their group name
-	apiService, err := apiServiceLister.Get(gv.Group)
-	if err != nil {
-		klog.V(4).Infof("Failed to get APIService for group %q: %v", gv.Group, err)
-		return nil
-	}
-	return apiService
-}
-
-func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(gv schema.GroupVersion) bool {
+func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Context, gv schema.GroupVersion) bool {
 	const annotationKey = "apiservice.kubernetes.io/non-persistent"
 
-	// No APIService registered for this GroupVersion.
-	// Fail open to avoid permanently blocking namespace deletion.
-	apiService := lookupAPIService(d.apiServiceLister, gv)
-	if apiService == nil {
+	gvr := schema.GroupVersionResource{
+		Group:    "apiregistration.k8s.io",
+		Version:  "v1",
+		Resource: "apiservices",
+	}
+
+	apiServiceName := fmt.Sprintf("%s.%s", gv.Version, gv.Group)
+	klog.Infof("apiServiceName===11111: %v", apiServiceName)
+
+	obj, err := d.metadataClient.Resource(gvr).Get(
+		ctx,
+		apiServiceName,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		klog.Errorf("failed to get APIService===11111: %v", err)
+	} else {
+		klog.Infof("===22222 annotations=%v", obj.GetAnnotations())
+	}
+
+	if obj == nil {
 		klog.Warningf(
 			"No APIService found for %q. Ignoring discovery failure.",
 			gv.String(),
@@ -527,38 +529,28 @@ func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(gv schema.Grou
 		return true
 	}
 
+	annotations := obj.GetAnnotations()
 	// Nil annotation map.
-	if apiService.Annotations == nil {
+	if annotations == nil {
 		klog.V(4).Infof(
 			"APIService %q has no annotations. Discovery failure will not be ignored.",
-			apiService.Name,
+			apiServiceName,
 		)
 		return false
 	}
 
-	value, exists := apiService.Annotations[annotationKey]
-	if exists && value == "true" {
-		klog.Infof(
-			"Ignoring discovery failure for %q because APIService %q is marked as resource-lifecycle=virtual.",
-			gv.String(),
-			apiService.Name,
-		)
-		return true
+	if value, exists := annotations[annotationKey]; exists {
+		klog.Infof("Found annotation '%s' with value: %s", annotationKey, value)
+		if exists && value == "true" {
+			return true
+		}
+	} else {
+		klog.Warningf("Annotation '%s' not found on this APIService", annotationKey)
 	}
-
-	klog.V(4).Infof(
-		"Discovery failure for %q will not be ignored. APIService=%q, annotation %q=%q, exists=%v",
-		gv.String(),
-		apiService.Name,
-		annotationKey,
-		value,
-		exists,
-	)
-
 	return false
 }
 
-func (d *namespacedResourcesDeleter) filterDiscoveryError(err error) error {
+func (d *namespacedResourcesDeleter) filterDiscoveryError(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -571,7 +563,7 @@ func (d *namespacedResourcesDeleter) filterDiscoveryError(err error) error {
 	filtered := make(map[schema.GroupVersion]error, len(failed.Groups))
 
 	for gv, gvErr := range failed.Groups {
-		if d.shouldIgnoreDiscoveryFailure(gv) {
+		if d.shouldIgnoreDiscoveryFailure(ctx, gv) {
 			klog.V(4).Infof(
 				"Ignoring discovery failure for %s",
 				gv.String(),
@@ -627,24 +619,7 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 
 	// Discovery failures marked as ignorable are removed from the error
 	// while preserving successfully discovered resources.
-	// err = d.filterDiscoveryError(err)
-
-	gvr := schema.GroupVersionResource{
-		Group:    "apiregistration.k8s.io",
-		Version:  "v1",
-		Resource: "apiservices",
-	}
-
-	obj, err := d.metadataClient.Resource(gvr).Get(
-		ctx,
-		"v1beta1.metrics.k8s.io",
-		metav1.GetOptions{},
-	)
-	if err != nil {
-		klog.Errorf("failed to get APIService===11111: %v", err)
-	} else {
-		klog.Infof("===22222 annotations=%v", obj.GetAnnotations())
-	}
+	err = d.filterDiscoveryError(ctx, err)
 
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
@@ -672,7 +647,7 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 		}
 	}
 
-	// err = d.filterDiscoveryError(err)
+	err = d.filterDiscoveryError(ctx, err)
 
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
