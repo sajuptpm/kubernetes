@@ -627,7 +627,7 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 
 	// Discovery failures marked as ignorable are removed from the error
 	// while preserving successfully discovered resources.
-	err = d.filterDiscoveryError(err)
+	// err = d.filterDiscoveryError(err)
 
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
@@ -655,7 +655,7 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 		}
 	}
 
-	err = d.filterDiscoveryError(err)
+	// err = d.filterDiscoveryError(err)
 
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
