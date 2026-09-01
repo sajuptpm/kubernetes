@@ -23,8 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/klog/v2"
-
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,6 +34,8 @@ import (
 	"k8s.io/client-go/discovery"
 	v1clientset "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/metadata"
+	"k8s.io/klog/v2"
+	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	"k8s.io/kubernetes/pkg/features"
 )
 
@@ -497,6 +497,66 @@ type allGVRDeletionMetadata struct {
 	finalizersToNumRemaining map[string]int
 }
 
+func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Context, gv schema.GroupVersion) bool {
+	const annotationKey = "apiservice.kubernetes.io/non-persistent"
+
+	gvr := apiregistrationv1.SchemeGroupVersion.WithResource("apiservices")
+	logger := klog.FromContext(ctx)
+	apiServiceName := fmt.Sprintf("%s.%s", gv.Version, gv.Group)
+	apiServ, err := d.metadataClient.Resource(gvr).Get(
+		ctx,
+		apiServiceName,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		logger.Info(
+			"Failed to get APIService, discovery failure will not be ignored",
+			"apiService", apiServiceName,
+			"err", err,
+		)
+		return false
+	}
+	if value, exists := apiServ.GetAnnotations()[annotationKey]; exists {
+		logger.Info(
+			"Found APIService annotation",
+			"annotation", annotationKey,
+			"value", value,
+			"apiService", apiServiceName,
+		)
+		return value == "true"
+	}
+	return false
+}
+
+func (d *namespacedResourcesDeleter) filterDiscoveryError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	logger := klog.FromContext(ctx)
+	failed, ok := err.(*discovery.ErrGroupDiscoveryFailed)
+	if !ok {
+		return err
+	}
+
+	filtered := make(map[schema.GroupVersion]error, len(failed.Groups))
+	for gv, gvErr := range failed.Groups {
+		if d.shouldIgnoreDiscoveryFailure(ctx, gv) {
+			logger.Info("Ignoring discovery failure", "groupVersion", gv.String())
+			continue
+		}
+		filtered[gv] = gvErr
+	}
+	logger.Info("Remaining discovery failures", "count", len(filtered))
+
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	return &discovery.ErrGroupDiscoveryFailed{
+		Groups: filtered,
+	}
+}
+
 // deleteAllContent will use the dynamic client to delete each resource identified in groupVersionResources.
 // It returns an estimate of the time remaining before the remaining resources are deleted.
 // If estimate > 0, not all resources are guaranteed to be gone.
@@ -510,6 +570,11 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	logger.V(4).Info("namespace controller - deleteAllContent", "namespace", namespace)
 
 	resources, err := d.discoverResourcesFn()
+
+	// Discovery failures marked as ignorable are removed from the error
+	// while preserving successfully discovered resources.
+	err = d.filterDiscoveryError(ctx, err)
+
 	if err != nil {
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
