@@ -509,7 +509,7 @@ func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Co
 		metav1.GetOptions{},
 	)
 	if err != nil {
-		logger.V(4).Info(
+		logger.Info(
 			"Failed to get APIService, discovery failure will not be ignored",
 			"apiService", apiServiceName,
 			"err", err,
@@ -517,7 +517,7 @@ func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Co
 		return false
 	}
 	if value, exists := apiServ.GetAnnotations()[annotationKey]; exists {
-		logger.V(4).Info(
+		logger.Info(
 			"Found APIService annotation",
 			"annotation", annotationKey,
 			"value", value,
@@ -541,12 +541,12 @@ func (d *namespacedResourcesDeleter) filterDiscoveryError(ctx context.Context, e
 	filtered := make(map[schema.GroupVersion]error, len(failed.Groups))
 	for gv, gvErr := range failed.Groups {
 		if d.shouldIgnoreDiscoveryFailure(ctx, gv) {
-			logger.V(4).Info("Ignoring discovery failure", "groupVersion", gv.String())
+			logger.Info("Ignoring discovery failure", "groupVersion", gv.String())
 			continue
 		}
 		filtered[gv] = gvErr
 	}
-	logger.V(4).Info("Remaining discovery failures", "count", len(filtered))
+	logger.Info("Remaining discovery failures", "count", len(filtered))
 
 	if len(filtered) == 0 {
 		return nil
