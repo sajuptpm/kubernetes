@@ -18,7 +18,7 @@ package deletion
 
 import (
 	"context"
-	"encoding/json"
+	//"encoding/json" //usd for debugging
 	"fmt"
 	"reflect"
 	"sync"
@@ -581,7 +581,7 @@ func (d *namespacedResourcesDeleter) filterDiscoveryError(ctx context.Context, e
 		return nil
 	} else {
 		klog.Infof(
-			"All discovery failures were not ignored; remaining failures=%d",
+			"======All discovery failures were not ignored; remaining failures=%d",
 			len(filtered),
 		)
 	}
@@ -616,8 +616,8 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 		"err", err,
 	)
 
-	data, _ := json.MarshalIndent(resources, "", "  ")
-	logger.Info("DISCOVERY_RESOURCES_JSON", "data", string(data))
+	//data, _ := json.MarshalIndent(resources, "", "  ")
+	//logger.Info("DISCOVERY_RESOURCES_JSON", "data", string(data))
 
 	// Discovery failures marked as ignorable are removed from the error
 	// while preserving successfully discovered resources.
@@ -657,7 +657,7 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 		)
 	}
 
-	err = d.filterDiscoveryError(ctx, err)
+	//err = d.filterDiscoveryError(ctx, err)
 
 	if err != nil {
 		logger.Error(
