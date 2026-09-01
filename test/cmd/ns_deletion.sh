@@ -228,12 +228,12 @@ kubectl get apiservice "${API_SERVICE}" -o yaml > "${BACKUP_FILE}"
 ################################################################################
 
 metrics_up
-kubectl delete ns nsTC01-1 nsTC01-2 nsTC02-1 nsTC02-2 nsTC04-1 nsTC04-2 nsTC05-1 nsTC05-2 nsTC06-1 nsTC06-2 nsTC07-1 nsTC07-2 nsTC08-1 nsTC08-2 nsTC09-1 nsTC09-2 nsTC10-1 nsTC10-2 sTC11-1 nsTC12-1 nsTC13-1 nsTC14-1 --wait=false
+cleanup_namespaces nsTC01-1 nsTC01-2 nsTC02-1 nsTC02-2 nsTC04-1 nsTC04-2 nsTC05-1 nsTC05-2 nsTC06-1 nsTC06-2 nsTC07-1 nsTC07-2 nsTC08-1 nsTC08-2 nsTC09-1 nsTC09-2 nsTC10-1 nsTC10-2 sTC11-1 nsTC12-1 nsTC13-1 nsTC14-1
 wait_for_namespace_deletion nsTC01-1 nsTC01-2 nsTC02-1 nsTC02-2 nsTC04-1 nsTC04-2 nsTC05-1 nsTC05-2 nsTC06-1 nsTC06-2 nsTC07-1 nsTC07-2 nsTC08-1 nsTC08-2 nsTC09-1 nsTC09-2 nsTC10-1 nsTC10-2 sTC11-1 nsTC12-1 nsTC13-1 nsTC14-1
 
 
 ################################################################################
-# TC01
+# TC01z
 ################################################################################
 
 header "TC01 - Namespace deletion when metrics-server healthy"
@@ -612,7 +612,9 @@ kubectl apply -f "${BACKUP_FILE}" >/dev/null 2>&1
 
 metrics_up
 
-cleanup_namespaces
+cleanup_namespaces nsTC01-1 nsTC01-2 nsTC02-1 nsTC02-2 nsTC04-1 nsTC04-2 nsTC05-1 nsTC05-2 nsTC06-1 nsTC06-2 nsTC07-1 nsTC07-2 nsTC08-1 nsTC08-2 nsTC09-1 nsTC09-2 nsTC10-1 nsTC10-2 sTC11-1 nsTC12-1 nsTC13-1 nsTC14-1
+wait_for_namespace_deletion nsTC01-1 nsTC01-2 nsTC02-1 nsTC02-2 nsTC04-1 nsTC04-2 nsTC05-1 nsTC05-2 nsTC06-1 nsTC06-2 nsTC07-1 nsTC07-2 nsTC08-1 nsTC08-2 nsTC09-1 nsTC09-2 nsTC10-1 nsTC10-2 sTC11-1 nsTC12-1 nsTC13-1 nsTC14-1
+
 
 ################################################################################
 # Summary
