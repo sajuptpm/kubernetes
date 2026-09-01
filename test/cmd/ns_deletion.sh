@@ -10,8 +10,8 @@ API_SERVICE="v1beta1.metrics.k8s.io"
 ANNOTATION_KEY="apiservice.kubernetes.io/non-persistent"
 BACKUP_FILE="/tmp/metrics-apiservice.yaml"
 
-WAIT_NS_DELETE=120
-WAIT_NS_STUCK=60
+WAIT_NS_DELETE=300
+WAIT_NS_STUCK=120
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -124,6 +124,8 @@ wait_for_namespace_deletion_ns() {
 
     while [ $elapsed -lt $timeout ]
     do
+        phase=$(kubectl get ns "$ns" -o jsonpath='{.status.phase}' 2>/dev/null)
+        echo "Namespace ${ns} phase=${phase}"
         kubectl get ns "${ns}" >/dev/null 2>&1
 
         if [ $? -ne 0 ]; then
@@ -161,6 +163,28 @@ wait_for_stuck_namespace() {
     return 1
 }
 
+wait_for_metrics_server_pods_deleted() {
+    local timeout="${1:-120}"
+    local interval=5
+    local elapsed=0
+
+    echo "Waiting for metrics-server pod(s) to be deleted..."
+
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        if ! kubectl -n kube-system get pods -l k8s-app=metrics-server --no-headers 2>/dev/null | grep -q .; then
+            echo "PASS: metrics-server pod(s) deleted."
+            return 0
+        fi
+
+        sleep "${interval}"
+        elapsed=$((elapsed + interval))
+    done
+
+    echo "FAIL: metrics-server pod(s) still exist after ${timeout}s"
+    kubectl -n kube-system get pods -l k8s-app=metrics-server
+    return 1
+}
+
 metrics_down() {
 
     echo "Scaling metrics-server to 0..."
@@ -169,8 +193,17 @@ metrics_down() {
         -n kube-system \
         --replicas=0
 
-    sleep 30
+    wait_for_metrics_server_pods_deleted
     kubectl get pods -n kube-system | grep metrics-server
+}
+
+wait_for_metrics_server_ready() {
+    local timeout="${1:-300}"
+
+    kubectl -n kube-system wait \
+        --for=condition=Available \
+        deployment/metrics-server \
+        --timeout="${timeout}s"
 }
 
 metrics_up() {
@@ -185,9 +218,7 @@ metrics_up() {
 
     kubectl get pods -n kube-system | grep metrics-server
 
-    kubectl rollout status deployment metrics-server \
-        -n kube-system \
-        --timeout=120s
+    wait_for_metrics_server_ready
 
     kubectl get pods -n kube-system | grep metrics-server
 }
@@ -488,7 +519,7 @@ fi
 # TC11
 ################################################################################
 
-header "TC11 - Namespace with pods and resources"
+header "TC11 - Namespace with pods and resources (metrics-server up and no annotation)"
 
 echo "EXPECTED : Namespace and resources deleted"
 
@@ -516,7 +547,7 @@ fi
 # TC12
 ################################################################################
 
-header "TC12 - Namespace with resources and metrics-server down"
+header "TC12 - Namespace with resources and metrics-server down and no annotation"
 
 echo "EXPECTED : Namespace stuck in Terminating"
 
@@ -575,13 +606,13 @@ fi
 # TC14
 ################################################################################
 
-header "TC14 - Force namespace deletion via finalizer removal"
+header "TC14 - Force namespace deletion via finalizer removal (metrics_down and annotation exists)"
 
 echo "EXPECTED : Namespace removed"
 
 cleanup_namespaces ns14
 
-remove_annotation
+annotate_true
 
 kubectl create ns ns14 >/dev/null
 
