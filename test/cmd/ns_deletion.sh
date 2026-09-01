@@ -10,7 +10,7 @@ API_SERVICE="v1beta1.metrics.k8s.io"
 ANNOTATION_KEY="apiservice.kubernetes.io/non-persistent"
 BACKUP_FILE="/tmp/metrics-apiservice.yaml"
 
-WAIT_NS_DELETE=180
+WAIT_NS_DELETE=120
 WAIT_NS_STUCK=60
 
 PASS_COUNT=0
@@ -45,7 +45,7 @@ cleanup_namespaces() {
         --ignore-not-found=true \
         --wait=false >/dev/null 2>&1
 
-    sleep 5
+    sleep 10
 }
 
 create_namespaces() {
@@ -56,7 +56,7 @@ create_namespaces() {
     do
         kubectl create ns "${ns}" >/dev/null 2>&1
     done
-    sleep 5
+    sleep 10
 }
 
 create_dummy_resources() {
@@ -142,7 +142,7 @@ namespace_stuck_terminating() {
     local ns=$1
 
     phase=$(kubectl get ns "$ns" -o jsonpath='{.status.phase}' 2>/dev/null)
-
+    echo "Namespace ${ns} phase=${phase}"
     [ "$phase" = "Terminating" ]
 }
 
@@ -169,20 +169,27 @@ metrics_down() {
         -n kube-system \
         --replicas=0
 
-    sleep 20
+    sleep 30
+    kubectl get pods -n kube-system | grep metrics-server
 }
 
 metrics_up() {
 
     echo "Scaling metrics-server to 1..."
 
+    kubectl get pods -n kube-system | grep metrics-server
+
     kubectl scale deployment metrics-server \
         -n kube-system \
         --replicas=1
 
+    kubectl get pods -n kube-system | grep metrics-server
+
     kubectl rollout status deployment metrics-server \
         -n kube-system \
-        --timeout=180s
+        --timeout=120s
+
+    kubectl get pods -n kube-system | grep metrics-server
 }
 
 annotate_true() {
@@ -227,13 +234,14 @@ kubectl get apiservice "${API_SERVICE}" -o yaml > "${BACKUP_FILE}"
 # cleanup
 ################################################################################
 
+remove_annotation
 metrics_up
-cleanup_namespaces nsTC01-1 nsTC01-2 nsTC02-1 nsTC02-2 nsTC04-1 nsTC04-2 nsTC05-1 nsTC05-2 nsTC06-1 nsTC06-2 nsTC07-1 nsTC07-2 nsTC08-1 nsTC08-2 nsTC09-1 nsTC09-2 nsTC10-1 nsTC10-2 sTC11-1 nsTC12-1 nsTC13-1 nsTC14-1
-wait_for_namespace_deletion nsTC01-1 nsTC01-2 nsTC02-1 nsTC02-2 nsTC04-1 nsTC04-2 nsTC05-1 nsTC05-2 nsTC06-1 nsTC06-2 nsTC07-1 nsTC07-2 nsTC08-1 nsTC08-2 nsTC09-1 nsTC09-2 nsTC10-1 nsTC10-2 sTC11-1 nsTC12-1 nsTC13-1 nsTC14-1
+cleanup_namespaces ns1 ns2 ns3 ns4 ns5 ns6 ns7 ns8 ns9 ns10 ns11 ns12 ns13 ns14
+wait_for_namespace_deletion ns1 ns2 ns3 ns4 ns5 ns6 ns7 ns8 ns9 ns10 ns11 ns12 ns13 ns14
 
 
 ################################################################################
-# TC01z
+# TC01
 ################################################################################
 
 header "TC01 - Namespace deletion when metrics-server healthy"
@@ -242,9 +250,9 @@ echo "EXPECTED : Namespaces must be deleted"
 
 metrics_up
 remove_annotation
-create_namespaces nsTC01-1 nsTC01-2
+create_namespaces ns1
 
-kubectl delete ns nsTC01-1 nsTC01-2 --wait=false
+kubectl delete ns ns1 --wait=false
 
 if wait_for_namespace_deletion
 then
@@ -263,12 +271,12 @@ header "TC02 - Metrics server down without annotation"
 
 echo "EXPECTED : Namespaces stay in Terminating state"
 
-create_namespaces nsTC02-1 nsTC02-2
+create_namespaces ns2
 metrics_down
 
-kubectl delete ns nsTC02-1 nsTC02-2 --wait=false
+kubectl delete ns ns2 --wait=false
 
-if wait_for_stuck_namespace nsTC02-1 nsTC02-2
+if wait_for_stuck_namespace ns2
 then
     echo "ACTUAL   : Namespace stuck in Terminating"
     pass
@@ -287,7 +295,7 @@ echo "EXPECTED : Namespaces deleted after metrics-server returns"
 
 metrics_up
 
-if wait_for_namespace_deletion nsTC02-1 nsTC02-2
+if wait_for_namespace_deletion ns2
 then
     echo "ACTUAL   : Namespaces deleted"
     pass
@@ -304,16 +312,16 @@ header "TC04 - Annotate after namespaces already stuck"
 
 echo "EXPECTED : Existing terminating namespaces deleted"
 
-create_namespaces nsTC04-1 nsTC04-2
+create_namespaces ns4
 metrics_down
 
-kubectl delete ns nsTC04-1 nsTC04-2 --wait=false
+kubectl delete ns ns4 --wait=false
 
-wait_for_stuck_namespace nsTC04-1 nsTC04-2
+wait_for_stuck_namespace ns4
 
 annotate_true
 
-if wait_for_namespace_deletion nsTC04-1 nsTC04-2
+if wait_for_namespace_deletion ns4
 then
     echo "ACTUAL   : Namespaces deleted"
     pass
@@ -330,14 +338,14 @@ header "TC05 - Annotation exists before deletion"
 
 echo "EXPECTED : Namespace deletion succeeds"
 
-create_namespaces nsTC05-1 nsTC05-2
+create_namespaces ns5
 metrics_down
 
 annotate_true
 
-kubectl delete ns nsTC05-1 nsTC05-2 --wait=false
+kubectl delete ns ns5 --wait=false
 
-if wait_for_namespace_deletion
+if wait_for_namespace_deletion ns5
 then
     echo "ACTUAL   : Namespaces deleted"
     pass
@@ -354,14 +362,14 @@ header "TC06 - Annotation=false"
 
 echo "EXPECTED : Namespace remains terminating"
 
-create_namespaces nsTC06-1 nsTC06-2
+create_namespaces ns6
 metrics_down
 
 annotate_false
 
-kubectl delete ns nsTC06-1 nsTC06-2 --wait=false
+kubectl delete ns ns6 --wait=false
 
-if wait_for_stuck_namespace nsTC06-1 nsTC06-2
+if wait_for_stuck_namespace ns6
 then
     echo "ACTUAL   : Namespace stuck"
     pass
@@ -380,15 +388,15 @@ echo "EXPECTED : Validate behavior when APIService is absent"
 
 kubectl apply -f "${BACKUP_FILE}" >/dev/null 2>&1
 
-create_namespaces nsTC07-1 nsTC07-2
+create_namespaces ns7
 
 kubectl delete apiservice "${API_SERVICE}"
 
 sleep 20
 
-kubectl delete ns nsTC07-1 nsTC07-2 --wait=false
+kubectl delete ns ns7 --wait=false
 
-if wait_for_namespace_deletion nsTC07-1 nsTC07-2
+if wait_for_namespace_deletion ns7
 then
     echo "ACTUAL   : Namespaces deleted"
 else
@@ -413,11 +421,11 @@ echo "MANUAL STEP REQUIRED"
 echo "Bring down another aggregated APIService then press ENTER"
 read
 
-create_namespaces nsTC08-1 nsTC08-2
+create_namespaces ns8
 
-kubectl delete ns nsTC08-1 nsTC08-2 --wait=false
+kubectl delete ns ns8 --wait=false
 
-if wait_for_stuck_namespace nsTC08-1 nsTC08-2
+if wait_for_stuck_namespace ns8
 then
     echo "ACTUAL   : Namespace stuck"
     pass
@@ -436,12 +444,12 @@ echo "EXPECTED : Namespace remains terminating"
 
 remove_annotation
 
-create_namespaces nsTC09-1 nsTC09-2
+create_namespaces ns9
 metrics_down
 
-kubectl delete ns nsTC09-1 nsTC09-2 --wait=false
+kubectl delete ns ns9 --wait=false
 
-if wait_for_stuck_namespace nsTC09-1 nsTC09-2
+if wait_for_stuck_namespace ns9
 then
     echo "ACTUAL   : Namespace stuck"
     pass
@@ -458,16 +466,16 @@ header "TC10 - Invalid annotation value"
 
 echo "EXPECTED : Namespace remains terminating"
 
-create_namespaces nsTC10-1 nsTC10-2
+create_namespaces ns10
 metrics_down
 
 kubectl annotate apiservice "${API_SERVICE}" \
     "${ANNOTATION_KEY}=yes" \
     --overwrite
 
-kubectl delete ns nsTC10-1 nsTC10-2 --wait=false
+kubectl delete ns ns10 --wait=false
 
-if wait_for_stuck_namespace nsTC10-1 nsTC10-2
+if wait_for_stuck_namespace ns10
 then
     echo "ACTUAL   : Namespace stuck"
     pass
@@ -487,15 +495,15 @@ echo "EXPECTED : Namespace and resources deleted"
 metrics_up
 remove_annotation
 
-cleanup_namespaces nsTC11-1
+cleanup_namespaces ns11
 
-kubectl create ns nsTC11-1 >/dev/null
+kubectl create ns ns11 >/dev/null
 
-create_dummy_resources nsTC11-1
+create_dummy_resources ns11
 
-kubectl delete ns nsTC11-1 --wait=false
+kubectl delete ns ns11 --wait=false
 
-if wait_for_namespace_deletion_ns nsTC11-1
+if wait_for_namespace_deletion_ns ns11
 then
     echo "ACTUAL   : Namespace deleted"
     pass
@@ -512,20 +520,20 @@ header "TC12 - Namespace with resources and metrics-server down"
 
 echo "EXPECTED : Namespace stuck in Terminating"
 
-cleanup_namespaces nsTC12-1
+cleanup_namespaces ns12
 remove_annotation
 
-kubectl create ns nsTC12-1 >/dev/null
+kubectl create ns ns12 >/dev/null
 
-create_dummy_resources nsTC12-1
+create_dummy_resources ns12
 
 metrics_down
 
-kubectl delete ns nsTC12-1 --wait=false
+kubectl delete ns ns12 --wait=false
 
 sleep "${WAIT_NS_STUCK}"
 
-if namespace_stuck_terminating nsTC12-1
+if namespace_stuck_terminating ns12
 then
     echo "ACTUAL   : Namespace stuck in Terminating"
     pass
@@ -542,19 +550,19 @@ header "TC13 - Namespace with resources, metrics-server down and annotation=true
 
 echo "EXPECTED : Namespace deleted"
 
-cleanup_namespaces nsTC13-1
+cleanup_namespaces ns13
 
-kubectl create ns nsTC13-1 >/dev/null
+kubectl create ns ns13 >/dev/null
 
-create_dummy_resources nsTC13-1
+create_dummy_resources ns13
 
 metrics_down
 
 annotate_true
 
-kubectl delete ns nsTC13-1 --wait=false
+kubectl delete ns ns13 --wait=false
 
-if wait_for_namespace_deletion_ns nsTC13-1
+if wait_for_namespace_deletion_ns ns13
 then
     echo "ACTUAL   : Namespace deleted"
     pass
@@ -571,27 +579,27 @@ header "TC14 - Force namespace deletion via finalizer removal"
 
 echo "EXPECTED : Namespace removed"
 
-cleanup_namespaces nsTC14-1
+cleanup_namespaces ns14
 
 remove_annotation
 
-kubectl create ns nsTC14-1 >/dev/null
+kubectl create ns ns14 >/dev/null
 
-create_dummy_resources nsTC14-1
+create_dummy_resources ns14
 
 metrics_down
 
-kubectl delete ns nsTC14-1 --wait=false
+kubectl delete ns ns14 --wait=false
 
 sleep "${WAIT_NS_STUCK}"
 
 echo "Removing namespace finalizers..."
 
-force_remove_namespace nsTC14-1 >/dev/null 2>&1
+force_remove_namespace ns14 >/dev/null 2>&1
 
 sleep 10
 
-kubectl get ns nsTC14-1 >/dev/null 2>&1
+kubectl get ns ns14 >/dev/null 2>&1
 
 if [ $? -ne 0 ]
 then
