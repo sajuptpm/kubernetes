@@ -18,13 +18,10 @@ package deletion
 
 import (
 	"context"
-	//"encoding/json" //usd for debugging
 	"fmt"
 	"reflect"
 	"sync"
 	"time"
-
-	"k8s.io/klog/v2"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +34,8 @@ import (
 	"k8s.io/client-go/discovery"
 	v1clientset "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/metadata"
+	"k8s.io/klog/v2"
+	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	"k8s.io/kubernetes/pkg/features"
 )
 
@@ -501,52 +500,34 @@ type allGVRDeletionMetadata struct {
 func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Context, gv schema.GroupVersion) bool {
 	const annotationKey = "apiservice.kubernetes.io/non-persistent"
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apiregistration.k8s.io",
-		Version:  "v1",
-		Resource: "apiservices",
-	}
-
+	gvr := apiregistrationv1.SchemeGroupVersion.WithResource("apiservices")
+	logger := klog.FromContext(ctx)
 	apiServiceName := fmt.Sprintf("%s.%s", gv.Version, gv.Group)
-	klog.Infof("apiServiceName===11111: %v", apiServiceName)
 
-	obj, err := d.metadataClient.Resource(gvr).Get(
+	apiServ, err := d.metadataClient.Resource(gvr).Get(
 		ctx,
 		apiServiceName,
 		metav1.GetOptions{},
 	)
 	if err != nil {
-		klog.Errorf("failed to get APIService===11111: %v", err)
-	} else {
-		klog.Infof("======22222 annotations=%v", obj.GetAnnotations())
-	}
-
-	if obj == nil {
-		klog.Warningf(
-			"======No APIService found for %q. Ignoring discovery failure.",
-			gv.String(),
-		)
-		return true
-	}
-
-	annotations := obj.GetAnnotations()
-	// Nil annotation map.
-	if annotations == nil {
-		klog.Infof(
-			"======APIService %q has no annotations. Discovery failure will not be ignored.",
-			apiServiceName,
+		logger.V(4).Info(
+			"Failed to get APIService, discovery failure will not be ignored",
+			"apiService", apiServiceName,
+			"err", err,
 		)
 		return false
 	}
+	if value, exists := apiServ.GetAnnotations()[annotationKey]; exists {
+		logger.V(4).Info(
+			"Found APIService annotation",
+			"annotation", annotationKey,
+			"value", value,
+			"apiService", apiServiceName,
+		)
 
-	if value, exists := annotations[annotationKey]; exists {
-		klog.Infof("======Found annotation '%s' with value: %s", annotationKey, value)
-		if exists && value == "true" {
-			return true
-		}
-	} else {
-		klog.Warningf("======Annotation '%s' not found on this APIService", annotationKey)
+		return value == "true"
 	}
+
 	return false
 }
 
@@ -554,37 +535,26 @@ func (d *namespacedResourcesDeleter) filterDiscoveryError(ctx context.Context, e
 	if err == nil {
 		return nil
 	}
-
+	logger := klog.FromContext(ctx)
 	failed, ok := err.(*discovery.ErrGroupDiscoveryFailed)
 	if !ok {
 		return err
 	}
 
 	filtered := make(map[schema.GroupVersion]error, len(failed.Groups))
-
 	for gv, gvErr := range failed.Groups {
 		if d.shouldIgnoreDiscoveryFailure(ctx, gv) {
-			klog.Infof(
-				"======Ignoring discovery failure for %s",
-				gv.String(),
-			)
+			logger.V(4).Info("Ignoring discovery failure", "groupVersion", gv.String())
 			continue
 		}
-
 		filtered[gv] = gvErr
 	}
+	logger.V(4).Info("Remaining discovery failures", "count", len(filtered))
 
 	if len(filtered) == 0 {
-		klog.Infof(
-			"======All discovery failures were ignored",
-		)
 		return nil
-	} else {
-		klog.Infof(
-			"======All discovery failures were not ignored; remaining failures=%d",
-			len(filtered),
-		)
 	}
+
 	return &discovery.ErrGroupDiscoveryFailed{
 		Groups: filtered,
 	}
@@ -602,34 +572,13 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	logger := klog.FromContext(ctx)
 	logger.V(4).Info("namespace controller - deleteAllContent", "namespace", namespace)
 
-	logger.V(0).Info(
-		"DEBUG_DISCOVERY_CALL",
-		"path", "/apis/metrics.k8s.io/v1beta1",
-		"namespace", namespace,
-	)
-
 	resources, err := d.discoverResourcesFn()
-
-	logger.V(0).Info(
-		"DEBUG_DISCOVERY_RESULT",
-		"resourceLists", len(resources),
-		"err", err,
-	)
-
-	//data, _ := json.MarshalIndent(resources, "", "  ")
-	//logger.Info("DISCOVERY_RESOURCES_JSON", "data", string(data))
 
 	// Discovery failures marked as ignorable are removed from the error
 	// while preserving successfully discovered resources.
 	err = d.filterDiscoveryError(ctx, err)
 
 	if err != nil {
-		logger.Error(
-			err,
-			"DISCOVERY_FAILED-1",
-			"type", fmt.Sprintf("%T", err),
-		)
-
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
 		// This updates namespace status conditions NamespaceDeletionDiscoveryFailure or DiscoveryFailed
@@ -639,32 +588,7 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	deletableResources := discovery.FilteredBy(discovery.SupportsAllVerbs{Verbs: []string{"delete"}}, resources)
 	groupVersionResources, err := discovery.GroupVersionResources(deletableResources)
 
-	//for _, rl := range deletableResources {
-	//	for _, r := range rl.APIResources {
-	//		klog.Infof(
-	//			"=========Deletable resource: %s/%s verbs=%v",
-	//			rl.GroupVersion,
-	//			r.Name,
-	//			r.Verbs,
-	//		)
-	//	}
-	//}
-
-	//for gvr := range groupVersionResources {
-	//	logger.V(0).Info(
-	//		"DEBUG_METRICS_GVR_DISCOVERED",
-	//		"gvr", gvr.String(),
-	//	)
-	//}
-
-	//err = d.filterDiscoveryError(ctx, err)
-
 	if err != nil {
-		//logger.Error(
-		//	err,
-		//	"DISCOVERY_FAILED-2",
-		//	"type", fmt.Sprintf("%T", err),
-		//)
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
 		conditionUpdater.ProcessGroupVersionErr(err)
