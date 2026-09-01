@@ -40,8 +40,10 @@ header() {
 }
 
 cleanup_namespaces() {
-    kubectl delete ns dummyns1 dummyns2 dummyns3 \
-        --ignore-not-found=true >/dev/null 2>&1
+    kubectl delete ns \
+        dummyns1 dummyns2 dummyns3 \
+        --ignore-not-found=true \
+        --wait=false >/dev/null 2>&1
 
     sleep 5
 }
@@ -50,9 +52,32 @@ create_namespaces() {
 
     cleanup_namespaces
 
-    kubectl create ns dummyns1 >/dev/null
-    kubectl create ns dummyns2 >/dev/null
-    kubectl create ns dummyns3 >/dev/null
+    kubectl create ns dummyns1 >/dev/null 2>&1
+    kubectl create ns dummyns2 >/dev/null 2>&1
+    kubectl create ns dummyns3 >/dev/null 2>&1
+}
+
+create_dummy_resources() {
+    local ns=$1
+
+    echo "Creating dummy resources in ${ns}"
+
+    kubectl -n "${ns}" create deployment nginx \
+        --image=nginx \
+        --replicas=1 >/dev/null 2>&1
+
+    kubectl -n "${ns}" create configmap test-cm \
+        --from-literal=key=value >/dev/null 2>&1
+
+    kubectl -n "${ns}" create secret generic test-secret \
+        --from-literal=password=test123 >/dev/null 2>&1
+
+    kubectl -n "${ns}" expose deployment nginx \
+        --port=80 >/dev/null 2>&1
+
+    kubectl -n "${ns}" wait \
+        --for=condition=available deployment/nginx \
+        --timeout=120s >/dev/null 2>&1 || true
 }
 
 all_namespaces_deleted() {
@@ -60,6 +85,7 @@ all_namespaces_deleted() {
     for ns in dummyns1 dummyns2 dummyns3
     do
         kubectl get ns "${ns}" >/dev/null 2>&1
+
         if [ $? -eq 0 ]; then
             return 1
         fi
@@ -86,28 +112,41 @@ wait_for_namespace_deletion() {
     return 1
 }
 
+wait_for_namespace_deletion_ns() {
+
+    local ns=$1
+    local timeout=$WAIT_NS_DELETE
+    local elapsed=0
+
+    while [ $elapsed -lt $timeout ]
+    do
+        kubectl get ns "${ns}" >/dev/null 2>&1
+
+        if [ $? -ne 0 ]; then
+            return 0
+        fi
+
+        sleep 5
+        elapsed=$((elapsed+5))
+    done
+
+    return 1
+}
+
 namespace_stuck_terminating() {
 
     local ns=$1
 
     phase=$(kubectl get ns "$ns" -o jsonpath='{.status.phase}' 2>/dev/null)
 
-    if [ "$phase" = "Terminating" ]; then
-        return 0
-    fi
-
-    return 1
+    [ "$phase" = "Terminating" ]
 }
 
 wait_for_stuck_namespace() {
 
     sleep "${WAIT_NS_STUCK}"
 
-    if namespace_stuck_terminating dummyns1; then
-        return 0
-    fi
-
-    return 1
+    namespace_stuck_terminating dummyns1
 }
 
 metrics_down() {
@@ -155,6 +194,15 @@ remove_annotation() {
         >/dev/null 2>&1
 }
 
+force_remove_namespace() {
+
+    local ns=$1
+
+    kubectl get ns "${ns}" -o json \
+      | jq '.spec.finalizers=[]' \
+      | kubectl replace --raw "/api/v1/namespaces/${ns}/finalize" -f -
+}
+
 ################################################################################
 # Backup
 ################################################################################
@@ -175,7 +223,7 @@ metrics_up
 remove_annotation
 create_namespaces
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 if wait_for_namespace_deletion
 then
@@ -197,7 +245,7 @@ echo "EXPECTED : Namespaces stay in Terminating state"
 create_namespaces
 metrics_down
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 if wait_for_stuck_namespace
 then
@@ -238,7 +286,7 @@ echo "EXPECTED : Existing terminating namespaces deleted"
 create_namespaces
 metrics_down
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 wait_for_stuck_namespace
 
@@ -266,7 +314,7 @@ metrics_down
 
 annotate_true
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 if wait_for_namespace_deletion
 then
@@ -290,7 +338,7 @@ metrics_down
 
 annotate_false
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 if wait_for_stuck_namespace
 then
@@ -317,7 +365,7 @@ kubectl delete apiservice "${API_SERVICE}"
 
 sleep 20
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 if wait_for_namespace_deletion
 then
@@ -341,13 +389,12 @@ echo "EXPECTED : Namespace deletion must remain blocked"
 
 echo
 echo "MANUAL STEP REQUIRED"
-echo "Bring down a NON-METRICS aggregated APIService."
-echo "Then press ENTER."
+echo "Bring down another aggregated APIService then press ENTER"
 read
 
 create_namespaces
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 if wait_for_stuck_namespace
 then
@@ -371,7 +418,7 @@ remove_annotation
 create_namespaces
 metrics_down
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 if wait_for_stuck_namespace
 then
@@ -397,7 +444,7 @@ kubectl annotate apiservice "${API_SERVICE}" \
     "${ANNOTATION_KEY}=yes" \
     --overwrite
 
-kubectl delete ns dummyns1 dummyns2 dummyns3
+kubectl delete ns dummyns1 dummyns2 dummyns3 --wait=false
 
 if wait_for_stuck_namespace
 then
@@ -405,6 +452,132 @@ then
     pass
 else
     echo "ACTUAL   : Namespace deleted"
+    fail
+fi
+
+################################################################################
+# TC11
+################################################################################
+
+header "TC11 - Namespace with pods and resources"
+
+echo "EXPECTED : Namespace and resources deleted"
+
+metrics_up
+remove_annotation
+
+cleanup_namespaces
+
+kubectl create ns dummyns1 >/dev/null
+
+create_dummy_resources dummyns1
+
+kubectl delete ns dummyns1 --wait=false
+
+if wait_for_namespace_deletion_ns dummyns1
+then
+    echo "ACTUAL   : Namespace deleted"
+    pass
+else
+    echo "ACTUAL   : Namespace still exists"
+    fail
+fi
+
+################################################################################
+# TC12
+################################################################################
+
+header "TC12 - Namespace with resources and metrics-server down"
+
+echo "EXPECTED : Namespace stuck in Terminating"
+
+cleanup_namespaces
+remove_annotation
+
+kubectl create ns dummyns1 >/dev/null
+
+create_dummy_resources dummyns1
+
+metrics_down
+
+kubectl delete ns dummyns1 --wait=false
+
+sleep "${WAIT_NS_STUCK}"
+
+if namespace_stuck_terminating dummyns1
+then
+    echo "ACTUAL   : Namespace stuck in Terminating"
+    pass
+else
+    echo "ACTUAL   : Namespace not stuck"
+    fail
+fi
+
+################################################################################
+# TC13
+################################################################################
+
+header "TC13 - Namespace with resources, metrics-server down and annotation=true"
+
+echo "EXPECTED : Namespace deleted"
+
+cleanup_namespaces
+
+kubectl create ns dummyns1 >/dev/null
+
+create_dummy_resources dummyns1
+
+metrics_down
+
+annotate_true
+
+kubectl delete ns dummyns1 --wait=false
+
+if wait_for_namespace_deletion_ns dummyns1
+then
+    echo "ACTUAL   : Namespace deleted"
+    pass
+else
+    echo "ACTUAL   : Namespace still exists"
+    fail
+fi
+
+################################################################################
+# TC14
+################################################################################
+
+header "TC14 - Force namespace deletion via finalizer removal"
+
+echo "EXPECTED : Namespace removed"
+
+cleanup_namespaces
+
+remove_annotation
+
+kubectl create ns dummyns1 >/dev/null
+
+create_dummy_resources dummyns1
+
+metrics_down
+
+kubectl delete ns dummyns1 --wait=false
+
+sleep "${WAIT_NS_STUCK}"
+
+echo "Removing namespace finalizers..."
+
+force_remove_namespace dummyns1 >/dev/null 2>&1
+
+sleep 10
+
+kubectl get ns dummyns1 >/dev/null 2>&1
+
+if [ $? -ne 0 ]
+then
+    echo "ACTUAL   : Namespace removed"
+    pass
+else
+    echo "ACTUAL   : Namespace still exists"
     fail
 fi
 
