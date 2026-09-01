@@ -518,12 +518,12 @@ func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Co
 	if err != nil {
 		klog.Errorf("failed to get APIService===11111: %v", err)
 	} else {
-		klog.Infof("===22222 annotations=%v", obj.GetAnnotations())
+		klog.Infof("======22222 annotations=%v", obj.GetAnnotations())
 	}
 
 	if obj == nil {
 		klog.Warningf(
-			"No APIService found for %q. Ignoring discovery failure.",
+			"======No APIService found for %q. Ignoring discovery failure.",
 			gv.String(),
 		)
 		return true
@@ -532,20 +532,20 @@ func (d *namespacedResourcesDeleter) shouldIgnoreDiscoveryFailure(ctx context.Co
 	annotations := obj.GetAnnotations()
 	// Nil annotation map.
 	if annotations == nil {
-		klog.V(4).Infof(
-			"APIService %q has no annotations. Discovery failure will not be ignored.",
+		klog.Infof(
+			"======APIService %q has no annotations. Discovery failure will not be ignored.",
 			apiServiceName,
 		)
 		return false
 	}
 
 	if value, exists := annotations[annotationKey]; exists {
-		klog.Infof("Found annotation '%s' with value: %s", annotationKey, value)
+		klog.Infof("======Found annotation '%s' with value: %s", annotationKey, value)
 		if exists && value == "true" {
 			return true
 		}
 	} else {
-		klog.Warningf("Annotation '%s' not found on this APIService", annotationKey)
+		klog.Warningf("======Annotation '%s' not found on this APIService", annotationKey)
 	}
 	return false
 }
@@ -564,8 +564,8 @@ func (d *namespacedResourcesDeleter) filterDiscoveryError(ctx context.Context, e
 
 	for gv, gvErr := range failed.Groups {
 		if d.shouldIgnoreDiscoveryFailure(ctx, gv) {
-			klog.V(4).Infof(
-				"Ignoring discovery failure for %s",
+			klog.Infof(
+				"======Ignoring discovery failure for %s",
 				gv.String(),
 			)
 			continue
@@ -575,12 +575,16 @@ func (d *namespacedResourcesDeleter) filterDiscoveryError(ctx context.Context, e
 	}
 
 	if len(filtered) == 0 {
-		klog.V(4).Info(
-			"All discovery failures were ignored",
+		klog.Infof(
+			"======All discovery failures were ignored",
 		)
 		return nil
+	} else {
+		klog.Infof(
+			"All discovery failures were not ignored; remaining failures=%d",
+			len(filtered),
+		)
 	}
-
 	return &discovery.ErrGroupDiscoveryFailed{
 		Groups: filtered,
 	}
@@ -612,25 +616,22 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 		"err", err,
 	)
 
-	if err == nil {
-		data, _ := json.MarshalIndent(resources, "", "  ")
-		logger.Info("DISCOVERY_RESOURCES_JSON", "data", string(data))
-	}
+	data, _ := json.MarshalIndent(resources, "", "  ")
+	logger.Info("DISCOVERY_RESOURCES_JSON", "data", string(data))
 
 	// Discovery failures marked as ignorable are removed from the error
 	// while preserving successfully discovered resources.
 	err = d.filterDiscoveryError(ctx, err)
 
 	if err != nil {
-		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
-		errs = append(errs, err)
-
 		logger.Error(
 			err,
-			"DISCOVERY_FAILED",
+			"DISCOVERY_FAILED-1",
 			"type", fmt.Sprintf("%T", err),
 		)
 
+		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
+		errs = append(errs, err)
 		// This updates namespace status conditions NamespaceDeletionDiscoveryFailure or DiscoveryFailed
 		conditionUpdater.ProcessDiscoverResourcesErr(err)
 	}
@@ -638,18 +639,32 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	deletableResources := discovery.FilteredBy(discovery.SupportsAllVerbs{Verbs: []string{"delete"}}, resources)
 	groupVersionResources, err := discovery.GroupVersionResources(deletableResources)
 
-	for gvr := range groupVersionResources {
-		if gvr.Group == "metrics.k8s.io" {
-			logger.V(0).Info(
-				"DEBUG_METRICS_GVR_DISCOVERED",
-				"gvr", gvr.String(),
+	for _, rl := range deletableResources {
+		for _, r := range rl.APIResources {
+			klog.Infof(
+				"=========Deletable resource: %s/%s verbs=%v",
+				rl.GroupVersion,
+				r.Name,
+				r.Verbs,
 			)
 		}
+	}
+
+	for gvr := range groupVersionResources {
+		logger.V(0).Info(
+			"DEBUG_METRICS_GVR_DISCOVERED",
+			"gvr", gvr.String(),
+		)
 	}
 
 	err = d.filterDiscoveryError(ctx, err)
 
 	if err != nil {
+		logger.Error(
+			err,
+			"DISCOVERY_FAILED-2",
+			"type", fmt.Sprintf("%T", err),
+		)
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
 		conditionUpdater.ProcessGroupVersionErr(err)
