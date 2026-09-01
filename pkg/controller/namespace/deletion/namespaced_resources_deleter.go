@@ -639,32 +639,32 @@ func (d *namespacedResourcesDeleter) deleteAllContent(ctx context.Context, ns *v
 	deletableResources := discovery.FilteredBy(discovery.SupportsAllVerbs{Verbs: []string{"delete"}}, resources)
 	groupVersionResources, err := discovery.GroupVersionResources(deletableResources)
 
-	for _, rl := range deletableResources {
-		for _, r := range rl.APIResources {
-			klog.Infof(
-				"=========Deletable resource: %s/%s verbs=%v",
-				rl.GroupVersion,
-				r.Name,
-				r.Verbs,
-			)
-		}
-	}
+	//for _, rl := range deletableResources {
+	//	for _, r := range rl.APIResources {
+	//		klog.Infof(
+	//			"=========Deletable resource: %s/%s verbs=%v",
+	//			rl.GroupVersion,
+	//			r.Name,
+	//			r.Verbs,
+	//		)
+	//	}
+	//}
 
-	for gvr := range groupVersionResources {
-		logger.V(0).Info(
-			"DEBUG_METRICS_GVR_DISCOVERED",
-			"gvr", gvr.String(),
-		)
-	}
+	//for gvr := range groupVersionResources {
+	//	logger.V(0).Info(
+	//		"DEBUG_METRICS_GVR_DISCOVERED",
+	//		"gvr", gvr.String(),
+	//	)
+	//}
 
 	//err = d.filterDiscoveryError(ctx, err)
 
 	if err != nil {
-		logger.Error(
-			err,
-			"DISCOVERY_FAILED-2",
-			"type", fmt.Sprintf("%T", err),
-		)
+		//logger.Error(
+		//	err,
+		//	"DISCOVERY_FAILED-2",
+		//	"type", fmt.Sprintf("%T", err),
+		//)
 		// discovery errors are not fatal.  We often have some set of resources we can operate against even if we don't have a complete list
 		errs = append(errs, err)
 		conditionUpdater.ProcessGroupVersionErr(err)
